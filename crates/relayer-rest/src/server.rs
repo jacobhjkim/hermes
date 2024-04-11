@@ -4,8 +4,8 @@ use std::{
 };
 
 use axum::{
-    extract::{Path, Query},
-    response::IntoResponse,
+    extract::{ConnectInfo, Path, Query},
+    response::{Html, IntoResponse},
     routing::{get, post},
     Extension, Json, Router, Server,
 };
@@ -48,6 +48,42 @@ impl<R, E> From<Result<R, E>> for JsonResult<R, E> {
     }
 }
 
+async fn get_available_endpoints(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+    let base_url = format!("//{}:{}", addr.ip(), addr.port());
+
+    let endpoints = vec![
+        "/version",
+        "/chains",
+        "/chain?id=_", // Dynamic segment
+        "/state",
+        "/clear_packets",
+    ];
+
+    let links = endpoints
+        .iter()
+        .map(|endpoint| {
+            format!("<li><a href=\"{base_url}{endpoint}\">{base_url}{endpoint}</a></li>")
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    Html(format!(
+        r#"<html>
+
+<body>
+    Available endpoints:
+    <br>
+    <ul>
+        {links}
+    </ul>
+</body>
+
+</html>
+"#
+    ))
+    .into_response()
+}
+
 async fn get_version(Extension(sender): Extension<Sender>) -> impl IntoResponse {
     let version: Result<_, RestApiError> = Ok(assemble_version_info(&sender));
     Json(JsonResult::from(version))
@@ -88,6 +124,7 @@ type Sender = channel::Sender<Request>;
 
 async fn run(addr: SocketAddr, sender: Sender) {
     let app = Router::new()
+        .route("/", get(get_available_endpoints))
         .route("/version", get(get_version))
         .route("/chains", get(get_chains))
         .route("/chain/:id", get(get_chain))
@@ -96,7 +133,7 @@ async fn run(addr: SocketAddr, sender: Sender) {
         .layer(Extension(sender));
 
     Server::bind(&addr)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
 }
